@@ -1,30 +1,64 @@
-import { View, StyleSheet, Image } from "react-native";
+import React from "react";
+import { Text, View } from "react-native";
+import { Image } from "expo-image";
+import { LinearGradient } from "expo-linear-gradient";
+import { useRouter } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import Animated, { FadeInDown } from "react-native-reanimated";
+import { Ionicons } from "@react-native-vector-icons/ionicons";
+import { PrimaryButton, Hexagon } from "@/src/components/ui";
+import { makeStyles, spacing, useTheme } from "@/src/theme";
 
-const EXPO_PUBLIC_BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
+const BG = "https://images.pexels.com/photos/4753994/pexels-photo-4753994.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=1200&w=800";
 
-export default function Index() {
-  console.log(EXPO_PUBLIC_BACKEND_URL, "EXPO_PUBLIC_BACKEND_URL");
-
+export default function Welcome() {
+  const styles = useStyles();
+  const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
+  const router = useRouter();
   return (
-    <View style={styles.container}>
-      <Image
-        source={require("../assets/images/app-image.png")}
-        style={styles.image}
-      />
+    <View style={styles.root} testID="welcome-screen">
+      <Image source={{ uri: BG }} style={styles.bg} contentFit="cover" transition={300} />
+      <LinearGradient colors={["rgba(0,0,0,0.1)", "rgba(0,0,0,0.55)", "rgba(0,0,0,0.95)"]} style={styles.bg} />
+      <View style={[styles.content, { paddingTop: insets.top + spacing.lg, paddingBottom: insets.bottom + spacing.xl }]}>
+        <View style={styles.brandRow}>
+          <Hexagon size={30} color={colors.brandSecondary} />
+          <Text style={styles.brand}>GYMPROOF</Text>
+        </View>
+        <View style={{ flex: 1 }} />
+        <Animated.View entering={FadeInDown.delay(100).duration(500)}>
+          <Text style={styles.kicker}>PROOF OF WORKOUT</Text>
+          <Text style={styles.title}>SHOW UP.{"\n"}PROVE IT.{"\n"}KEEP THE STREAK.</Text>
+        </Animated.View>
+        <Animated.View entering={FadeInDown.delay(250).duration(500)} style={styles.points}>
+          {[
+            ["camera", "Live camera proof — no gallery, no old photos"],
+            ["flame", "Weekly streaks that feel earned"],
+            ["trophy", "Earn XP and climb your city's board"],
+          ].map(([icon, t]) => (
+            <View key={t} style={styles.point}>
+              <Ionicons name={icon as any} size={18} color={colors.brandSecondary} />
+              <Text style={styles.pointText}>{t}</Text>
+            </View>
+          ))}
+        </Animated.View>
+        <Animated.View entering={FadeInDown.delay(400).duration(500)}>
+          <PrimaryButton testID="get-started-button" label="Get Started" variant="brand" onPress={() => router.push("/sign-in")} />
+        </Animated.View>
+      </View>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#0c0c0c",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  image: {
-    width: "100%",
-    height: "100%",
-    resizeMode: "contain",
-  },
-});
+const useStyles = makeStyles((c) => ({
+  root: { flex: 1, backgroundColor: c.surfaceInverse },
+  bg: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
+  content: { flex: 1, paddingHorizontal: spacing.xl },
+  brandRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  brand: { color: c.onSurfaceInverse, fontSize: 18, fontWeight: "900", letterSpacing: 2 },
+  kicker: { color: c.brandSecondary, fontWeight: "900", letterSpacing: 2, fontSize: 13, marginBottom: spacing.sm },
+  title: { color: c.onSurfaceInverse, fontSize: 40, lineHeight: 44, fontWeight: "900" },
+  points: { gap: spacing.md, marginVertical: spacing.xl },
+  point: { flexDirection: "row", alignItems: "center", gap: spacing.md },
+  pointText: { color: c.onSurfaceInverse, fontSize: 15, fontWeight: "600", flex: 1 },
+}));

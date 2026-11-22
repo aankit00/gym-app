@@ -1,0 +1,46 @@
+{
+  "summary": "Backend: 23/23 pytest pass (auth 401, onboarding, validation, PATCH target, dashboard shape, challenge single-use/ownership/expiry window, captured_at checks, duplicate->suspicious, landscape->rejected, real dumbbell->accepted+100XP, 2nd accept same day->already_counted_today, week bonus +250 & week_completed widget & streak=2, proofs list, city/all leaderboard with 3-user city isolation). Gemini 3 Flash verification works live. Frontend (390x844): Welcome -> Get Started -> +1 2015550100 / 424242 -> 7-step onboarding (step validation works) -> Home (streak-widget, week-row, level-card, prove-workout-button) -> Board, Stats (Statistics/Achievements), Me (target 2-5 changes persist & reflect on Home/Stats) -> prove screen opens permission screen and close works -> sign out returns to Welcome, session persists on reload, /home deep link is guarded when signed out. Only minor UI issues found. No deprecated Expo packages and no RN SafeAreaView imports detected.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/proof/submit", "issue": "Race: two concurrent accepted submits on the same day can both be counted (check-then-insert, no unique index on user_id+local_date+counted=true). Low risk, since a challenge is needed per submit, but a user can open 2 challenges."},
+      {"endpoint": "POST /api/proof/submit", "issue": "Duplicate-hash check only looks at the same user's past proofs (latest 500), so the same photo can be reused across different accounts. Acceptable for MVP."},
+      {"endpoint": "GET /api/leaderboard", "issue": "When XP is tied, my_rank (count of users with xp > mine, +1) can differ from the entry's rank in the list (which is sorted by xp then created_at). Example: two users with 0 XP both get my_rank=1, but the list shows ranks 1 and 2."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Sign-in phone row", "issue": "On web the phone TextInput overflows the right padding: the input ends at x=378, while the Send code button ends at x=366 (390 viewport). The web TextInput's intrinsic min-width stops flex:1 from shrinking it. Fix: add minWidth: 0 to the phone input style. Reference: /app/frontend/app/sign-in.tsx:105", "testID": "phone-input", "priority": "low"},
+      {"component": "OTP error text", "issue": "A wrong OTP shows only 'is incorrect' because the code uses the Clerk field error's `message`. Use `longMessage` ('Incorrect code') or a custom string. Reference: /app/frontend/app/sign-in.tsx:84-85", "testID": "code-error", "priority": "medium"},
+      {"component": "Stats progress ring", "issue": "Console error on web: 'Invalid DOM property transform-origin. Did you mean transformOrigin?' It comes from the react-native-svg Circle using the rotation/origin props. Fix: use transform={`rotate(-90 ${size/2} ${size/2})`} or rotate a wrapping View instead. Reference: /app/frontend/app/(tabs)/stats.tsx:21", "testID": "weekly-goal-card", "priority": "low"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Stats", "issues": ["The Monthly card shows the raw '2026-11' string. Format it as 'November 2026'. Reference: (tabs)/stats.tsx:76"]},
+      {"screen": "Sign-in (new phone)", "issues": ["A brand-new phone number that has never existed in Clerk shows a Cloudflare Turnstile 'Verify you are human' modal during web sign-up (Clerk bot protection, dev instance). This is expected Clerk behaviour, but on native it may add friction. Check that it renders correctly in Expo Go."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_gymproof_api.py", "/app/backend/tests/test_gymproof_streak.py", "/app/backend/tests/clerk_token.py", "/app/backend/tests/fixtures/", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "sign-in.tsx:84-85: show Clerk longMessage (or 'Incorrect code, try again') instead of 'is incorrect'",
+    "sign-in.tsx:105: add minWidth: 0 to the phone TextInput so it stays inside the 24px side padding on web",
+    "stats.tsx:21: replace the rotation/origin props on the svg Circle with a transform string to remove the transform-origin DOM warning",
+    "stats.tsx:76: format the month label (e.g. toLocaleString month/year)",
+    "Optional: make the accepted-proof counting atomic (e.g. a unique partial index on {user_id, local_date} where counted=true, or a find_one_and_update guard)",
+    "Optional: compute leaderboard my_rank the same way as the list order, so ties don't show conflicting ranks",
+    "prove.tsx:50: the challenge refresh call in snap() sits outside try/catch, so a network failure there causes an unhandled promise rejection"
+  ],
+  "critical_code_review_comments": [
+    "captured_at comes from the client, so it is only a weak anti-cheat signal. The real protection is the server-side challenge TTL plus the one-use challenge, and both work correctly.",
+    "Rejected and suspicious proofs also store their phash, so retaking a near-identical frame after a rejection is flagged as suspicious, not rejected. This is acceptable but worth knowing.",
+    "Changing weekly_target retroactively changes past streak and best-streak calculations, because they are computed from the current target."
+  ],
+  "updated_files": ["/app/backend/tests/test_gymproof_api.py", "/app/backend/tests/test_gymproof_streak.py", "/app/backend/tests/clerk_token.py", "/app/backend/tests/fixtures/*.jpg", "/app/memory/test_credentials.md"],
+  "success_rate": {"backend": "100%", "frontend": "95% (all flows work; minor UI issues)"},
+  "seed_data_creation": "Backend tests create TEST_ users for +12015550160-0163 (cities TEST_Pune/test_pune/TEST_Delhi/TEST_Bonus) and remove their users/proofs/challenges by user_id in teardown. The UI test onboarded +12015550100 as TEST_Ria/TEST_Pune; it was removed afterwards by user_id. User 0142 (Rahul) was not touched.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run with: cd /app/backend/tests && python -m pytest test_gymproof_api.py test_gymproof_streak.py -v (pytest.ini uses xdist loadscope, which keeps module order). Tokens come from clerk_token.py <phone>. The dumbbell fixtures are real Pexels photos; mirrored and cropped variants avoid the dhash duplicate check. In UI automation, wait about 1.5s after the welcome screen before tapping get-started-button (entering animation). The camera cannot be exercised on web; only the permission screen is reachable.",
+  "rca_of_issue": ""
+}

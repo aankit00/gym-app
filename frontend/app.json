@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "frontend",
+    "name": "GymProof",
     "slug": "frontend",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -9,14 +9,20 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.emergent.brostreak.f527nz"
+      "bundleIdentifier": "com.emergent.brostreak.f527nz",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Snap live Gym Proof photos to keep your streak"
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#000000"
       },
-      "package": "com.emergent.brostreak.f527nz"
+      "package": "com.emergent.brostreak.f527nz",
+      "permissions": [
+        "android.permission.CAMERA"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -38,7 +44,16 @@
       "expo-image",
       "expo-secure-store",
       "expo-web-browser",
-      "expo-status-bar"
+      "expo-status-bar",
+      "@clerk/expo",
+      "@react-native-vector-icons/ionicons",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Snap live Gym Proof photos to keep your streak",
+          "recordAudioAndroid": false
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

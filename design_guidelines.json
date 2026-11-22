@@ -1,0 +1,183 @@
+{
+  "app_name": "GymProof",
+  "personality": "5 Brutalist Mobile typography with 4 Tactile / Playful layout & gamification",
+  "personality_one_liner": "A bold, high-contrast, gamified fitness tracker that combines chunky tactile cards with aggressive typography for ultimate accountability.",
+  "color": {
+    "surface": "#F2F2F7",
+    "onSurface": "#111118",
+    "surfaceSecondary": "#FFFFFF",
+    "onSurfaceSecondary": "#111118",
+    "surfaceTertiary": "#E5E5EA",
+    "onSurfaceTertiary": "#3A3A3C",
+    "surfaceInverse": "#18161B",
+    "onSurfaceInverse": "#FFFFFF",
+    "brand": "#F5A623",
+    "brandPrimary": "#FF9F0A",
+    "onBrandPrimary": "#FFFFFF",
+    "brandSecondary": "#FFD60A",
+    "onBrandSecondary": "#18161B",
+    "brandTertiary": "#FFF4CE",
+    "onBrandTertiary": "#FF9F0A",
+    "success": "#34C759",
+    "onSuccess": "#FFFFFF",
+    "warning": "#FFD60A",
+    "onWarning": "#18161B",
+    "error": "#FF3B30",
+    "onError": "#FFFFFF",
+    "info": "#0A84FF",
+    "onInfo": "#FFFFFF",
+    "border": "#E5E5EA",
+    "borderStrong": "#C7C7CC",
+    "divider": "#E5E5EA",
+    "muted": "#8E8E93"
+  },
+  "typography": {
+    "displayFontFamily": "Space Grotesk",
+    "textFontFamily": "Plus Jakarta Sans",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Use generous tactile spacing for cards (md/lg gaps) but tight typographic lockups inside headers. No cramped padding on active targets.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": "1",
+  "navigation": "bottom_tabs",
+  "icon_set": "Phosphor",
+  "glassmorphism": {
+    "enabled": true,
+    "do's": [
+      "Use subtle glass effect for the bottom tab bar",
+      "Use frosted glass on the 'Prove Your Workout' sticky CTA container",
+      "Use glass for modal scrims"
+    ],
+    "dont's": [
+      "Do not use glass for normal white list cards or stats cards",
+      "Do not use glass on form inputs"
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Welcome",
+      "purpose": "High-impact splash and value prop introducing GymProof.",
+      "states": {
+        "loading": "Skeleton overlay",
+        "empty": "N/A",
+        "error": "Standard toast"
+      },
+      "layout": "Full-bleed background image with a heavy gradient scrim (top to bottom). Bold display typography in bottom 40%, pinned 'Get Started' CTA. Seamlessly transitions to Clerk OTP login sheet."
+    },
+    {
+      "name": "Onboarding",
+      "purpose": "Collect user baseline stats and target goals (Name, Age, Height, Gender, Goal, Weekly Target, City).",
+      "states": {
+        "loading": "Spinner on CTA",
+        "empty": "N/A",
+        "error": "Inline validation text"
+      },
+      "layout": "Step-by-step wizard. 1 question per screen. Chunky pill selections, large touch targets, oversized sliders for numbers, smooth sticky CTA anchored at the bottom with keyboard avoidance."
+    },
+    {
+      "name": "Home",
+      "purpose": "Dashboard for daily accountability featuring the Duolingo-style streak widget and workout proof entry.",
+      "states": {
+        "loading": "Skeleton blocks for widget and feed",
+        "empty": "Illustration of flame with zero streak",
+        "error": "Retry block"
+      },
+      "layout": "Light grey background (`surface`). Top section: Duolingo-style Streak Widget (white card, bold numeric streak, prominent flame icon/mascot logic, dynamic states: completed/pending/week completed). Below: Today's status/plan. Bottom: Sticky, large 'Prove Your Workout' CTA overriding scroll context."
+    },
+    {
+      "name": "Camera Proof",
+      "purpose": "In-app camera to take a photo of gym equipment/grip for AI verification.",
+      "states": {
+        "loading": "Camera initializing / Scanning animation overlay",
+        "empty": "N/A",
+        "error": "Fallback message 'AI couldn't verify. Retake.'"
+      },
+      "layout": "Full-screen camera viewfinder (`expo-camera`). Outline guide for hand/equipment. Snap button at bottom center. Followed by a 'Processing/Verifying' loading overlay, then a celebratory 'Day Complete!' modal."
+    },
+    {
+      "name": "Board (Leaderboard)",
+      "purpose": "City XP Leaderboard gamifying the experience against local peers.",
+      "states": {
+        "loading": "List skeletons",
+        "empty": "No users found in your city illustration",
+        "error": "Retry button"
+      },
+      "layout": "Bold uppercase header. Top 3 users get a podium-style layout (larger avatars, crown accents). Below: Stacked white cards on light grey background, listing Rank, Avatar, Name, XP."
+    },
+    {
+      "name": "Stats",
+      "purpose": "Detailed breakdown of weekly targets, streaks, and achievements.",
+      "states": {
+        "loading": "Skeleton loaders for charts and weekday row",
+        "empty": "No stats to show yet, complete a workout!",
+        "error": "Retry block"
+      },
+      "layout": "Top: Bold uppercase 'STATISTICS' header with a yellow hexagon (`brandSecondary`) behind the letter 'S'. Section titles have yellow-orange (`brandPrimary`) underline highlights. Weekday row (Mon-Sun) displaying flame icons for completed days. Segmented control pills for Weekly/Monthly/All-Time toggle. White rounded cards showcasing stats."
+    },
+    {
+      "name": "Me",
+      "purpose": "User profile, settings, and achievement gallery.",
+      "states": {
+        "loading": "Profile skeleton",
+        "empty": "No achievements earned yet",
+        "error": "Retry block"
+      },
+      "layout": "Profile header (avatar, username, total XP). Milestone gallery grid (4/8/12/26 weeks). Settings list using chunky white cards and simple chevrons."
+    }
+  ],
+  "images": {
+    "welcome_bg": {
+      "url": "https://images.unsplash.com/photo-1778828450059-f39d5bbb01af?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMzJ8MHwxfHNlYXJjaHwxfHxneW0lMjBpbnRlcmlvciUyMGFic3RyYWN0JTIwYmFja2dyb3VuZHxlbnwwfHx8fDE3OTUzNjg3MTR8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "Dark gym interior abstract background"
+    },
+    "streak_flame_icon": {
+      "url": "https://images.unsplash.com/photo-1730724056895-9d566f3c5f89?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDN8MHwxfHNlYXJjaHwyfHwzZCUyMGZsYW1lJTIwc3RyZWFrJTIwZmlyZSUyMGljb258ZW58MHx8fHwxNzk1MzY4NzE0fDA&ixlib=rb-4.1.0&q=85",
+      "alt": "3D flame streak icon for widget"
+    },
+    "prove_workout_hero": {
+      "url": "https://images.pexels.com/photos/4753994/pexels-photo-4753994.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "Person holding dumbbell close-up"
+    }
+  },
+  "instructions_to_main_agent": [
+    "STRICT COMPLIANCE: Adhere strictly to the requested aesthetic: light grey backgrounds, white rounded cards, bold black uppercase typography, and energetic yellow-orange accents.",
+    "NAVIGATION: Create a 4-tab bottom bar (Home, Board, Stats, Me). The active tab MUST use a dark/black icon color (`onSurface`), while inactive tabs use grey (`muted`).",
+    "HEADER SPECIFICS: For the 'Stats' tab, construct the 'STATISTICS' header exactly as requested: bold, uppercase, with an absolute-positioned yellow hexagon SVG (`brandSecondary`) sitting behind the first letter. Use an underline highlight (`brandPrimary`) for section titles.",
+    "WIDGETS: On the Home screen, build a chunky, Duolingo-style streak widget with 3 clear visual states: 'completed' (flame on, celebratory), 'pending' (greyed out or warning color), and 'week completed' (special milestone state).",
+    "LAYOUT: Apply 'Brutalist typography' rules to headers (Space Grotesk, large, uppercase) but pair them with 'Tactile / Playful' component shapes (pill segments, fully rounded white cards, generous padding).",
+    "INTERACTION: The 'Prove Your Workout' CTA must be unmissable. Keep it pinned to the bottom of the Home screen (or prominently centered) with a solid or frosted glass container behind it.",
+    "CAMERA: Ensure the 'Prove Workout' action opens the in-app camera natively via expo-camera, blocking gallery uploads to enforce real-time accountability."
+  ]
+}
