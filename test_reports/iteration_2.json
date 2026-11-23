@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration 2 tested Plans and Streak Freeze with Razorpay TEST keys live. Backend: 64/64 pytest pass, 1 skipped (the 'no keys' 503 test, skipped because keys are now set). Covered: plans list/detail (free vs pro locking), start/stop, 403 on starting a pro plan before purchase, exercises, every plan exercise resolves (105 exercises). All 234 media URLs return 200 (images from free-exercise-db, 24 mp4s on jsDelivr). Real Razorpay orders are created for freeze (4900 paise) and pro (19900 paise). A client-sent amount is ignored. A double tap reuses the same order. A bad signature gets 400 and nothing is granted. Another user's order gets 400 'Unknown order'. Freeze order returns 409 when a freeze is already owned. The webhook rejects requests (it returns 503 because RAZORPAY_WEBHOOK_SECRET is not set). Frontend (390x844, user +12015550100): login, Home (FreezeCard, HomePlanCard and its tap-through), Plans tab (defaults to the profile gender, Men/Women filter, 2 PRO tags per gender plus the Rs199 note), plan detail (day pills, exercise thumbnails, Start -> Stop, Home reflects the new active plan), exercise detail (photo loop and video), pro plan locked view (exercise count shown, no Start button, Unlock Rs199 opens the Razorpay iframe showing Rs199), freeze screen (Get Streak Freeze Rs49 opens the Razorpay iframe showing Rs49; dismissing resets the button), Board, Stats, Me and sign-out all work. I found and fixed one bug: on web the demo video rendered at its intrinsic 1280x720 inside the 342x192 frame, showing only a skyline corner, and it never played. Deprecated API detected: expo-router/unstable-native-tabs.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/razorpay/webhook", "issue": "RAZORPAY_WEBHOOK_SECRET is not set, so the webhook returns 503. Fulfilment relies only on the client calling /payments/verify plus reconcile_orders. reconcile_orders only looks at orders from the last 24h (4 max). If the app closes mid-checkout and the user doesn't return within 24h, a captured payment is never delivered."},
+      {"endpoint": "GET /api/plans, GET /api/plans/{id}, POST /api/plans/{id}/start, POST /api/freeze/order", "issue": "user_with_purchases and reconcile_orders call the Razorpay API in sequence (up to 4 order_payments calls) on every request while the user has open 'created' orders less than 24h old. This adds latency, and each order is fetched again on every request. Consider throttling (e.g. a last_reconciled_at field) or relying on the webhook."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ExerciseDemo VideoDemo (web)", "issue": "FIXED by testing agent. expo-video's web VideoView passes the RN style straight to <video>. With only position:absolute plus top/left/right/bottom:0, the replaced element kept its 1280x720 size, so only the top-left corner showed. p.play() ran in the useVideoPlayer setup before a <video> was mounted, so the video stayed paused at t=0. Fix: added width/height 100% to styles.fill, and added useEffect(() => player.play(), [player]). Verified: the video is now 342x192 and plays. Reference: /app/frontend/src/components/ExerciseDemo.tsx:8-22,56", "testID": "exercise-demo-video", "priority": "high (fixed)"},
+      {"component": "Sign-in country code", "issue": "The country code now defaults to +91. Entering a US test number without changing it shows Clerk's raw 'Identifier is invalid.' message. Show a friendlier message. Reference: /app/frontend/app/sign-in.tsx", "testID": "sign-in-error", "priority": "low"}
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "expo-router unstable-native-tabs", "issue": "Deprecated import 'expo-router/unstable-native-tabs'. Metro warns: use 'expo-router/native-tabs'. Reference: /app/frontend/app/(tabs)/_layout.tsx:4"}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_gymproof_payments_live.py", "/app/backend/tests/test_gymproof_plans.py", "/app/backend/tests/test_gymproof_freeze.py", "/app/test_reports/pytest/pytest_results_iter2.xml"],
+  "action_items": [
+    "Set RAZORPAY_WEBHOOK_SECRET in backend env and register the /api/razorpay/webhook URL in the Razorpay dashboard (events payment.captured, payment.failed). Without it, payments that are not reported back by the app within 24h are lost.",
+    "Change the import in app/(tabs)/_layout.tsx:4 from 'expo-router/unstable-native-tabs' to 'expo-router/native-tabs'.",
+    "Throttle reconcile_orders (e.g. once per minute per user) so GET /plans doesn't call Razorpay on every request.",
+    "sign-in.tsx: map Clerk's 'Identifier is invalid' to 'Check the country code and number'.",
+    "Review the ExerciseDemo.tsx fix made by the testing agent (style width/height 100%, plus play() in useEffect) on native (Expo Go)."
+  ],
+  "critical_code_review_comments": [
+    "Payments security looks correct. Prices are fixed on the server (PRODUCTS). The checkout signature is checked with an HMAC compare_digest. is_paid checks status=captured, order_id, amount and currency. fulfil_order is atomic (find_one_and_update on status != fulfilled). verify is scoped to the user's own order.",
+    "server.py is 706 lines (over 700). Split the payment/plan routes into routers.",
+    "@app.on_event is deprecated in FastAPI; move to lifespan.",
+    "Exercise media: images come from yuhonas/free-exercise-db (Unlicense). The videos come from jsDelivr namnq/workout-free-videos (AI-generated, relevant content checked for hip thrust). Confirm that repo's license allows use."
+  ],
+  "updated_files": ["/app/frontend/src/components/ExerciseDemo.tsx", "/app/backend/tests/test_gymproof_payments_live.py (new)", "/app/backend/tests/test_gymproof_plans.py (payments_enabled assertion relaxed)", "/app/backend/tests/test_gymproof_freeze.py (no-keys test skips when keys are set; payments_enabled assertion relaxed)"],
+  "success_rate": {"backend": "100% (64/64, 1 skipped)", "frontend": "100% of requested flows after the ExerciseDemo video fix"},
+  "seed_data_creation": "Pytest TEST_ users for +12015550164-0182 are removed in teardown by user_id. The UI test used the existing user +12015550100 ('Demo Lifter'). Its active plan was temporarily set to burn-and-sculpt and then restored to peach-protocol. The one freeze order I created via the UI (order_U3KCsgDSl36QDo) was deleted by order_id. A pre-existing pro_plans order (order_U3K4uNjyVRzZGn, 18:38) was not created by me and was left in place. No other user data was changed.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend/tests && python -m pytest test_gymproof_api.py test_gymproof_streak.py test_gymproof_plans.py test_gymproof_freeze.py test_gymproof_payments_live.py -v. The sign-in country code defaults to +91, so fill country-code-input with '+1' before the phone number. Razorpay web checkout opens as iframe.razorpay-checkout-frame. To close it: tap the back arrow at (42,38), then 'Yes, exit' inside the frame. Tab screens stay mounted, so use screen-specific testIDs rather than body text.",
+  "rca_of_issue": "ExerciseDemo video on web: expo-video VideoView.web.tsx passes StyleSheet.flatten(style) directly as the <video> CSS. An absolutely positioned replaced element does not stretch from left/right/top/bottom, so it uses its intrinsic size. Separately, VideoPlayer.web play() only affects <video> elements that are already mounted, and the useVideoPlayer setup callback runs before VideoView mounts. Mitigation applied: explicit 100% width/height, plus play() after mount."
+}

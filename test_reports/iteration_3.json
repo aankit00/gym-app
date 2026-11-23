@@ -1,0 +1,43 @@
+{
+  "summary": "Iteration 3 tested the WorkoutX library, demos, alternatives and per-user plan swaps. Backend: 19 of 19 new pytest tests pass (test_gymproof_library.py). The older suites (api, streak, plans) pass 38 of 38 after 2 outdated assertions in test_gymproof_plans.py were updated for the new schema. Covered: GET /api/library returns 1904 unique items with all keys, 9 groups, 28 equipment types and a thumb on every item. Exercise detail: ex_SAWOOH returns video and poster for male and female, with canonical_id and models; the female id ex_HYOSAB canonicalises to ex_SAWOOH; Wind_Sprints returns photos with similar=true; an unknown id gives 404 and a bad model gives 422. Alternatives return 5-6 items for every Lean Machine move and never the same move or its other-gender version. Swaps: PUT, then GET shows swapped/id/original_id; DELETE resets; PUT with the original id removes the swap document; female ids are stored as canonical; photo exercises can be swapped in; errors return 404/404/404/422 for bad index, day, exercise and plan; a locked Pro plan returns 403 on PUT and DELETE; swaps are per user. Frontend (375x667, demo user +12015550100): the Plans|Library switch works. Library shows 1904 items. Search, group, level and equipment chips filter correctly (squat=145, Chest=159, Chest+Beginner=59). Thumbnails load, FlashList scrolls and deep items open. The exercise screen plays a muted looping WorkoutX video (readyState 4). The Male/Female switch changes the clip (ex_HYOSAB to ex_SAWOOH). Level chip, Alternatives button and the 'Demos by WorkoutX' credit are all shown. Wind_Sprints shows photos, 'Similar movement' and the free-exercise-db credit. On plan/[id], rows show LevelChip and Alternatives; 'Use' swaps the row and shows SWAPPED and 'Reset to original'; Reset restores the move. Preview (mode=candidate) followed by exercise-use-button swaps and returns to the plan. Regression: home and freeze card, plans list (6 cards), Pro lock (no rows, Unlock button) and leaderboard all work. No WorkoutX API requests were triggered (all 2764 media links were fresh in wx_media). All test swaps and users were cleaned up (plan_swaps=0).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/exercises/{free-exercise-db id that has a WorkoutX match} (e.g. Barbell_Squat)", "issue": "Returns the photo-only version (video null, similar=true) instead of resolving through PLAN_MATCH to the matched WorkoutX move. Plan rows now send the WorkoutX id, so this is only reachable through old deep links or stored ids."},
+      {"endpoint": "GET /api/library (after media expiry)", "issue": "cached_poster() returns None for expired links. When the signed links expire (current batch e=1795503600, about 2026-11-24 07:00 UTC), every library thumb becomes null and the list shows placeholder icons. Links are refreshed only one exercise at a time, on detail open, with about 220 requests left. This matches plan.md, but expect library/alternatives thumbnails to disappear daily unless links are re-seeded."},
+      {"endpoint": "PUT /api/plans/{id}/days/{day}/exercises/{index}", "issue": "Accepts any exercise in the library or photo set, not only alternatives for the same muscle (e.g. a chest move can replace a glute move). This is acceptable if intended."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "exercise/[id] candidate flow from the exercise screen", "issue": "Path: plan, then exercise (mode=current or swapped), then Alternatives, then tap an alternative (preview, mode=candidate), then 'Use this in my plan'. router.back() returns to the previous exercise screen, which is stale: it still shows the old move, and with mode=swapped it shows a Reset button for a swap that may no longer exist. Reproduced: on a swapped row, picking the original 'Barbell Hip Thrust' removed the swap on the server, but the app landed on 'Hip-Thrust in Smith Machine' with a Reset button. Suggested fix: dismiss back to the plan screen (router.dismissTo or pop 2), or refetch the plan row.", "testID": "exercise-use-button", "priority": "MEDIUM"},
+      {"component": "AlternativesSheet close animation", "issue": "After 'Use', the parent sets alt=null at once, so during the slide-out the sheet re-renders with no subtitle and no Use buttons. This is a brief visual glitch. Suggested fix: keep the last exercise/slot while the sheet closes.", "testID": "alternatives-sheet", "priority": "LOW"},
+      {"component": "ExerciseDemo VideoDemo (web)", "issue": "Leaving the exercise screen logs an unhandled 'The play() request was interrupted because the media was removed from the document'. Suggested fix: wrap player.play() in a try/catch for the web promise. Reference: /app/frontend/src/components/ExerciseDemo.tsx:21", "testID": "exercise-demo-video", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "LevelChip / Use buttons", "issues": ["White 11px text on success #34C759 (about 2.2:1) and on brandPrimary #FF9F0A (about 2.1:1) fails WCAG AA. Use dark text (#18161B) on the green and amber chips and on the orange 'Use' buttons. Reference: /app/frontend/src/components/LevelChip.tsx:13-14"]},
+      {"screen": "Library (Plans tab)", "issues": ["Filter chips are 36px tall with no hitSlop, below the 44pt minimum. Reference: ExerciseLibrary.tsx:124", "The search field, 3 chip rows and count use about 330px of a 667px screen, so only about 3 rows of results are visible. Consider collapsing the filters into one row or a 'Filters' sheet, or scrolling the filters with the list.", "Equipment chip row has 29 options in one horizontal scroll, which is hard to discover."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_gymproof_library.py", "/app/backend/tests/test_gymproof_plans.py", "/app/test_reports/pytest/pytest_library.xml"],
+  "action_items": [
+    "Fix the candidate 'Use' flow from the exercise screen. It returns to a stale exercise screen; navigate back to the plan screen instead (exercise/[id].tsx planAction, router.back()).",
+    "Raise LevelChip and 'Use' button text contrast by using dark text on the green and amber backgrounds.",
+    "Make the library filter chips 44pt tall (or add hitSlop) and consider a more compact filter header.",
+    "Optional: resolve free-exercise-db ids through PLAN_MATCH in GET /api/exercises/{id}.",
+    "Optional: catch the web play() promise rejection in ExerciseDemo; keep the sheet content while it closes."
+  ],
+  "critical_code_review_comments": [
+    "Media links expire for the whole catalogue at once, so library and alternatives thumbs all become null at the same time. Refresh is lazy, per exercise, and limited by quota (~220 requests). This is documented in plan.md, but the user should know the library will mostly show placeholder icons after the first day.",
+    "exercise/[id].tsx builds the `slot` object on every render and passes it to AlternativesSheet, whose useEffect depends on `slot`. No refetch loop was seen (1 request), but any parent re-render while the sheet is open refetches the list. Wrap slot in useMemo.",
+    "There are no deprecated Expo packages: expo-video and @shopify/flash-list are used, and expo-av is absent."
+  ],
+  "updated_files": ["/app/backend/tests/test_gymproof_library.py (new)", "/app/backend/tests/test_gymproof_plans.py (updated 2 outdated assertions: has_video key removed, Barbell_Squat is now photo-only, so ex_SAWOOH is used)"],
+  "success_rate": {"backend": "100% (19/19 new, 38/38 regression)", "frontend": "~92% (all requested flows work; 1 medium navigation bug in the candidate flow from the exercise screen)"},
+  "seed_data_creation": "Temporary TEST_LIB users +12015550185/+12015550186 were created and then deleted along with their swaps. Swaps made on the demo user +12015550100 (Peach Protocol day 1) were all reset; plan_swaps is 0.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend/tests && python -m pytest test_gymproof_library.py -v (pytest.ini forces -n 2; use -n 0 for serial runs, not -p no:xdist). Do not open uncached exercises in bulk: each detail call with an expired link costs 1 WorkoutX request. Check fresh links with db.wx_media expires_at first. Web login: tap 'Get Started', set country-code-input to '+1', fill phone-input, then code-input 424242. The demo user is female, so the default demo model is female. AlternativesSheet slides in, so wait about 1s before tapping its rows. Stacked screens stay in the DOM, so use :visible selectors."
+}

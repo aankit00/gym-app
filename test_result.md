@@ -101,3 +101,8 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+agent_communication:
+  - agent: "main"
+    message: "Added Streak Freeze + Razorpay (backend/payments.py, server.py freeze routes + compute_stats freeze logic, frontend app/freeze.tsx, src/components/FreezeCard.tsx, src/payments/*). Razorpay keys are NOT set, so /api/freeze/order and /api/freeze/verify return 503 and the buy button is disabled; real checkout cannot be tested. Test freeze logic by seeding users.freezes / freeze_weeks / proofs / payments in Mongo."
+  - agent: "main"
+    message: "Added training plans (Plans tab, plan detail, exercise detail with video / photo-loop demos), PRO unlock via Razorpay (keys NOT set -> 503, unlock button disabled). Verify route moved from /api/freeze/verify to /api/payments/verify. Test user +12015550100 is onboarded as female 'Demo Lifter' with active plan peach-protocol."

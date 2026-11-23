@@ -26,7 +26,37 @@ export function useApi() {
 }
 
 export type WeekDay = { date: string; label: string; done: boolean; is_today: boolean; is_future: boolean };
+export type Freeze = {
+  owned: number; price_inr: number; payments_enabled: boolean; can_buy: boolean; last_week_frozen: boolean;
+  frozen_weeks: string[]; repair: { week_start: string; deadline: string; streak_at_risk: number } | null;
+};
+export type ProStatus = { unlocked: boolean; price_inr: number; payments_enabled: boolean; plan_count: number };
+export type PlanCard = {
+  id: string; gender: "male" | "female"; name: string; tagline: string; goal: string; level: string; duration_weeks: number;
+  premium: boolean; icon: string; days_per_week: number; locked: boolean; active: boolean;
+};
+export type Level = "beginner" | "intermediate" | "pro";
+export type PlanExercise = {
+  index: number; id: string; original_id: string; swapped: boolean; similar: boolean;
+  name: string; sets: number; reps: string; rest_sec: number; muscle: string; equipment: string; level: Level; image: string | null;
+};
+export type LibraryItem = {
+  id: string; name: string; level: Level; group: string; target: string; equipment: string; thumb: string | null;
+};
+export type Library = { items: LibraryItem[]; groups: string[]; equipment: string[] };
+export type PlanDetail = PlanCard & {
+  description: string; pro: ProStatus;
+  days: { day: number; title: string; focus: string; exercise_count: number; exercises: PlanExercise[] }[];
+};
+export type Exercise = {
+  id: string; canonical_id: string; name: string; model: "male" | "female" | null; models: { male?: string; female?: string };
+  level: Level; group: string; target: string; equipment: string; primary_muscles: string[]; secondary_muscles: string[];
+  instructions: string[]; tips: string[]; sets: string | null; reps: string | null;
+  video: string | null; poster: string | null; images: string[]; similar: boolean; source: "workoutx" | "free-exercise-db";
+};
 export type Dashboard = {
+  freeze: Freeze;
+  active_plan: { id: string; name: string; days_per_week: number } | null;
   name: string; city: string; streak_weeks: number; best_streak: number; weekly_target: number; week_count: number;
   remaining: number; today_done: boolean; widget_state: "completed" | "pending" | "week_completed";
   week_days: WeekDay[]; total_visits: number; month_visits: number; month: string; completed_weeks: number;

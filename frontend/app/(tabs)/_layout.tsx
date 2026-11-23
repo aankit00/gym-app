@@ -1,13 +1,14 @@
 import React from "react";
 import { Platform } from "react-native";
 import { Tabs } from "expo-router";
-import { NativeTabs } from "expo-router/unstable-native-tabs";
+import { NativeTabs } from "expo-router/native-tabs";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { usesNativeTabs } from "@/src/navigation";
 import { useTheme } from "@/src/theme";
 
 const TABS = [
   { name: "home", label: "Home", sf: "house.fill", icon: "home" },
+  { name: "plans", label: "Plans", sf: "dumbbell.fill", icon: "barbell" },
   { name: "board", label: "Board", sf: "trophy.fill", icon: "trophy" },
   { name: "stats", label: "Stats", sf: "chart.bar.fill", icon: "stats-chart" },
   { name: "me", label: "Me", sf: "person.fill", icon: "person" },

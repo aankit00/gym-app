@@ -22,6 +22,7 @@ function AuthGate() {
   return (
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="prove" options={{ presentation: "fullScreenModal", animation: "slide_from_bottom" }} />
+      <Stack.Screen name="freeze" options={{ presentation: "modal" }} />
     </Stack>
   );
 }

@@ -8,6 +8,8 @@ import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { useDashboard } from "@/src/useDashboard";
 import StreakWidget from "@/src/components/StreakWidget";
 import WeekRow from "@/src/components/WeekRow";
+import FreezeCard from "@/src/components/FreezeCard";
+import HomePlanCard from "@/src/components/HomePlanCard";
 import { BigTitle, Card, PrimaryButton, SectionTitle } from "@/src/components/ui";
 import { usesNativeTabs } from "@/src/navigation";
 import { makeStyles, radius, spacing, useTheme } from "@/src/theme";
@@ -41,6 +43,8 @@ export default function Home() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.brandPrimary} />}>
           <Text style={styles.hello} testID="home-greeting">Hey {data.name.split(" ")[0]}, keep showing up.</Text>
           <StreakWidget d={data} />
+          <FreezeCard freeze={data.freeze} onPress={() => router.push("/freeze")} />
+          <HomePlanCard plan={data.active_plan} />
 
           <SectionTitle text="This Week" />
           <WeekRow days={data.week_days} />

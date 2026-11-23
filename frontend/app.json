@@ -53,7 +53,8 @@
           "cameraPermission": "Snap live Gym Proof photos to keep your streak",
           "recordAudioAndroid": false
         }
-      ]
+      ],
+      "expo-video"
     ],
     "experiments": {
       "typedRoutes": true

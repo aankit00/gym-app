@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from motor.motor_asyncio import AsyncIOMotorClient
 from PIL import Image
 from pydantic import BaseModel, Field
@@ -27,6 +27,13 @@ try:  # launched as `backend.server` (the default)
     from backend.clerk_auth import clerk_router, require_user
 except ModuleNotFoundError:  # launched from inside backend/ as `server`
     from clerk_auth import clerk_router, require_user
+
+try:
+    from backend import library, payments, plans_data
+except ModuleNotFoundError:
+    import library
+    import payments
+    import plans_data
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
 
@@ -50,6 +57,15 @@ INDEXES: dict[str, list[IndexModel]] = {
                    unique=True, partialFilterExpression={"counted": True}),
         IndexModel([("phash", ASCENDING)], name="phash"),
     ],
+    "freeze_weeks": [IndexModel([("user_id", ASCENDING), ("week_start", ASCENDING)], name="user_week", unique=True)],
+    "payments": [
+        IndexModel([("order_id", ASCENDING)], name="order_id", unique=True),
+        IndexModel([("user_id", ASCENDING), ("created_at", DESCENDING)], name="user_created"),
+    ],
+    "webhook_events": [IndexModel([("event_id", ASCENDING)], name="event_id", unique=True)],
+    "plan_swaps": [IndexModel([("user_id", ASCENDING), ("plan_id", ASCENDING), ("day", ASCENDING), ("index", ASCENDING)],
+                              name="user_plan_slot", unique=True)],
+    "wx_media": [IndexModel([("id", ASCENDING)], name="id", unique=True)],
 }
 
 
@@ -112,6 +128,9 @@ class UserDoc(BaseModel):
     city_key: str
     tz_offset_min: int = 0
     xp: int = 0
+    freezes: int = 0  # Streak Freezes bought and not yet used
+    plans_unlocked: bool = False  # paid once to open the Pro training plans
+    active_plan_id: Optional[str] = None
     created_at: str
 
     @classmethod
@@ -196,17 +215,40 @@ async def compute_stats(user: UserDoc) -> dict:
     def done(w: date) -> bool:
         return per_week.get(w, 0) >= target
 
+    one_week = timedelta(days=7)
+    frozen = {date.fromisoformat(f["week_start"]) for f in
+              await db.freeze_weeks.find({"user_id": user.user_id}, {"_id": 0, "week_start": 1}).to_list(1000)}
+
+    def chain(w: date) -> int:
+        """Verified weeks in the unbroken run ending at w. A frozen week keeps the run alive without adding to it."""
+        n = 0
+        while done(w) or w in frozen:
+            n += 1 if done(w) else 0
+            w -= one_week
+        return n
+
+    # Streak Freeze: only last week can be saved, and only if it broke a live streak.
+    # An owned freeze is used automatically; otherwise the user can buy one until this week ends.
+    last_week = this_week - one_week
+    repair = None
+    if not done(last_week) and last_week not in frozen:
+        at_risk = chain(last_week - one_week)
+        if at_risk > 0:
+            if await use_freeze(user, last_week):
+                frozen.add(last_week)
+            else:
+                repair = {"week_start": last_week.isoformat(), "deadline": (this_week + timedelta(days=6)).isoformat(),
+                          "streak_at_risk": at_risk}
+
     # Current streak: current week counts if already completed; otherwise start from last week.
-    streak = 0
-    w = this_week if done(this_week) else this_week - timedelta(days=7)
-    while done(w):
-        streak += 1
-        w -= timedelta(days=7)
+    streak = chain(this_week if done(this_week) else last_week)
 
     # Best streak
     best, run, prev = 0, 0, None
-    for wk in sorted(k for k in per_week if done(k)):
-        run = run + 1 if prev and wk - prev == timedelta(days=7) else 1
+    for wk in sorted({k for k in per_week if done(k)} | frozen):
+        if not (prev and wk - prev == one_week):
+            run = 0
+        run += 1 if done(wk) else 0
         best = max(best, run)
         prev = wk
 
@@ -243,7 +285,92 @@ async def compute_stats(user: UserDoc) -> dict:
         "week_days": week_days, "total_visits": total, "month_visits": month_visits, "month": month_prefix,
         "completed_weeks": completed_weeks, "xp": user.xp, "level": user.xp // LEVEL_XP + 1,
         "level_progress": (user.xp % LEVEL_XP) / LEVEL_XP, "milestones": milestones, "achievements": achievements,
+        "freeze": {"owned": user.freezes, "price_inr": payments.FREEZE_PRICE_PAISE // 100,
+                   "payments_enabled": payments.enabled(), "can_buy": user.freezes == 0, "repair": repair,
+                   "last_week_frozen": last_week in frozen, "frozen_weeks": sorted(w.isoformat() for w in frozen)},
     }
+
+
+async def use_freeze(user: UserDoc, week: date) -> bool:
+    """Spend one owned freeze on `week`. Atomic: the count can't go below zero and a week is frozen once."""
+    if not await db.users.find_one_and_update({"user_id": user.user_id, "freezes": {"$gt": 0}}, {"$inc": {"freezes": -1}}):
+        return False
+    try:
+        await db.freeze_weeks.insert_one({"user_id": user.user_id, "week_start": week.isoformat(),
+                                          "applied_at": now_utc().isoformat()})
+        user.freezes -= 1
+    except DuplicateKeyError:  # a concurrent request froze this week already; give the freeze back
+        await db.users.update_one({"user_id": user.user_id}, {"$inc": {"freezes": 1}})
+    return True
+
+
+async def fulfil_order(order_id: str, payment_id: str) -> None:
+    """Deliver a paid order exactly once, however many times verify/webhook/reconcile report it."""
+    row = await db.payments.find_one_and_update(
+        {"order_id": order_id, "status": {"$ne": "fulfilled"}},
+        {"$set": {"status": "fulfilled", "payment_id": payment_id, "fulfilled_at": now_utc().isoformat()}})
+    if not row:
+        return
+    grant = {"$set": {"plans_unlocked": True}} if row["product"] == "pro_plans" else {"$inc": {"freezes": 1}}
+    await db.users.update_one({"user_id": row["user_id"]}, grant)
+    logger.info("Order fulfilled: %s order=%s user=%s", row["product"], order_id, row["user_id"])
+
+
+async def settle(row: dict, payment: dict) -> bool:
+    """Fulfil the order if this payment is captured for the order's own amount."""
+    if not payments.is_paid(payment, row["order_id"], row["amount"]):
+        return False
+    await fulfil_order(row["order_id"], payment["id"])
+    return True
+
+
+_last_reconcile: dict[str, datetime] = {}
+
+
+async def reconcile_orders(user_id: str) -> None:
+    """Pick up payments that were captured but never reported back by the app (closed mid-checkout).
+    Checks Razorpay at most once a minute per user."""
+    last = _last_reconcile.get(user_id)
+    if last and (now_utc() - last).total_seconds() < 60:
+        return
+    _last_reconcile[user_id] = now_utc()
+    since = (now_utc() - timedelta(days=1)).isoformat()
+    open_orders = await db.payments.find({"user_id": user_id, "status": "created", "created_at": {"$gte": since}},
+                                         {"_id": 0}).sort("created_at", -1).to_list(4)
+    for o in open_orders:
+        try:
+            for p in await payments.order_payments(o["order_id"]):
+                await settle(o, p)
+        except Exception as exc:
+            logger.warning("reconcile %s failed: %s", o["order_id"], exc)
+
+
+async def start_order(user_id: str, product: str) -> dict:
+    """Razorpay order for `product`. Reuses a just-created unpaid one so a double tap can't lead to paying twice."""
+    item = payments.PRODUCTS[product]
+    recent = await db.payments.find_one(
+        {"user_id": user_id, "product": product, "status": "created",
+         "created_at": {"$gte": (now_utc() - timedelta(minutes=10)).isoformat()}},
+        {"_id": 0, "order_id": 1}, sort=[("created_at", -1)])
+    if recent:
+        order_id = recent["order_id"]
+    else:
+        try:
+            order = await payments.create_order(user_id, product)
+        except Exception as exc:
+            logger.exception("Razorpay order failed: %s", exc)
+            raise HTTPException(status_code=502, detail="Couldn't start the payment. Try again.")
+        order_id = order["id"]
+        await db.payments.insert_one({"order_id": order_id, "user_id": user_id, "product": product,
+                                      "amount": item["amount"], "currency": payments.CURRENCY,
+                                      "status": "created", "created_at": now_utc().isoformat()})
+    return {"key_id": payments.key_id(), "order_id": order_id, "amount": item["amount"],
+            "currency": payments.CURRENCY, "name": "GymProof", "description": item["description"]}
+
+
+def require_payments() -> None:
+    if not payments.enabled():
+        raise HTTPException(status_code=503, detail="Payments aren't switched on yet.")
 
 
 # ---------- Routes ----------
@@ -262,10 +389,10 @@ async def get_me(auth: dict = Depends(require_user)):
 
 @api_router.post("/me")
 async def create_me(body: Profile, auth: dict = Depends(require_user)):
-    existing = await db.users.find_one({"user_id": auth["user_id"]}, {"_id": 0, "xp": 1, "created_at": 1})
-    user = UserDoc(user_id=auth["user_id"], **body.model_dump(), city_key=city_key(body.city),
-                   xp=(existing or {}).get("xp", 0),
-                   created_at=(existing or {}).get("created_at", now_utc().isoformat()))
+    keep = ("xp", "freezes", "plans_unlocked", "active_plan_id", "created_at")
+    existing = await db.users.find_one({"user_id": auth["user_id"]}, {"_id": 0, **{k: 1 for k in keep}}) or {}
+    user = UserDoc(**{"created_at": now_utc().isoformat(), **existing}, user_id=auth["user_id"], **body.model_dump(),
+                   city_key=city_key(body.city))
     await db.users.update_one({"user_id": user.user_id}, {"$set": user.to_mongo()}, upsert=True)
     return {"onboarded": True, "profile": user.model_dump()}
 
@@ -288,7 +415,9 @@ async def dashboard(tz_offset_min: Optional[int] = None, auth: dict = Depends(re
         await db.users.update_one({"user_id": user.user_id}, {"$set": {"tz_offset_min": tz_offset_min}})
         user.tz_offset_min = tz_offset_min
     stats = await compute_stats(user)
-    return {"name": user.name, "city": user.city, **stats}
+    plan = plans_data.PLANS_BY_ID.get(user.active_plan_id or "")
+    return {"name": user.name, "city": user.city, **stats,
+            "active_plan": plan and {"id": plan["id"], "name": plan["name"], "days_per_week": plan["days_per_week"]}}
 
 
 @api_router.post("/proof/challenge")
@@ -397,6 +526,246 @@ async def list_proofs(limit: int = Query(30, ge=1, le=100), auth: dict = Depends
         .sort("created_at", -1).limit(limit).to_list(limit)
 
 
+class VerifyPayment(BaseModel):
+    razorpay_order_id: str = Field(max_length=64)
+    razorpay_payment_id: str = Field(max_length=64)
+    razorpay_signature: str = Field(max_length=128)
+
+
+@api_router.get("/freeze")
+async def freeze_status(auth: dict = Depends(require_user)):
+    await get_user_or_404(auth["user_id"])
+    if payments.enabled():
+        await reconcile_orders(auth["user_id"])
+    stats = await compute_stats(await get_user_or_404(auth["user_id"]))
+    return {**stats["freeze"], "streak_weeks": stats["streak_weeks"]}
+
+
+@api_router.post("/freeze/order")
+async def freeze_order(auth: dict = Depends(require_user)):
+    user = await get_user_or_404(auth["user_id"])
+    require_payments()
+    await reconcile_orders(user.user_id)
+    user = await get_user_or_404(user.user_id)
+    await compute_stats(user)  # uses an owned freeze first if last week needs one
+    if user.freezes > 0:
+        raise HTTPException(status_code=409, detail="You already have a Streak Freeze ready.")
+    return await start_order(user.user_id, "streak_freeze")
+
+
+@api_router.post("/payments/verify")
+async def payment_verify(body: VerifyPayment, auth: dict = Depends(require_user)):
+    require_payments()
+    row = await db.payments.find_one({"order_id": body.razorpay_order_id, "user_id": auth["user_id"]}, {"_id": 0})
+    if not row:
+        raise HTTPException(status_code=400, detail="Unknown order")
+    if row["status"] == "fulfilled":
+        return {"status": "fulfilled"}
+    if not payments.valid_checkout_signature(row["order_id"], body.razorpay_payment_id, body.razorpay_signature):
+        raise HTTPException(status_code=400, detail="Payment could not be verified.")
+    try:
+        payment = await payments.fetch_payment(body.razorpay_payment_id)
+    except Exception as exc:
+        logger.exception("Razorpay payment fetch failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Couldn't confirm the payment yet. Try again.")
+    if payment.get("order_id") != row["order_id"]:
+        raise HTTPException(status_code=400, detail="Payment could not be verified.")
+    # "pending" = authorised but not captured yet; the webhook or the next check completes it
+    return {"status": "fulfilled" if await settle(row, payment) else "pending"}
+
+
+@api_router.post("/razorpay/webhook")
+async def razorpay_webhook(request: Request):
+    if not payments.webhook_enabled():
+        raise HTTPException(status_code=503, detail="Webhook is not configured")
+    raw = await request.body()  # signature is over the untouched bytes
+    if not payments.valid_webhook_signature(raw, request.headers.get("x-razorpay-signature", "")):
+        raise HTTPException(status_code=400, detail="Invalid webhook signature")
+    event_id = request.headers.get("x-razorpay-event-id")
+    if not event_id:
+        raise HTTPException(status_code=400, detail="Missing event id")
+    event = json.loads(raw)
+    kind = event.get("event")
+    payment = event.get("payload", {}).get("payment", {}).get("entity", {})
+    row = await db.payments.find_one({"order_id": payment.get("order_id") or ""}, {"_id": 0})
+    if row and kind == "payment.captured":
+        await settle(row, payment)
+    elif row and kind == "payment.failed":
+        await db.payments.update_one({"order_id": row["order_id"], "status": "created"},
+                                     {"$set": {"last_failure_at": now_utc().isoformat()}})
+    with suppress(DuplicateKeyError):  # recorded after handling, so a retried delivery is processed until it succeeds
+        await db.webhook_events.insert_one({"event_id": event_id, "event": kind, "received_at": now_utc().isoformat()})
+    return {"ok": True}
+
+
+# ---------- Training plans ----------
+PLAN_CARD_KEYS = ("id", "gender", "name", "tagline", "goal", "level", "duration_weeks", "premium", "icon", "days_per_week")
+
+
+def plan_card(plan: dict, user: UserDoc) -> dict:
+    return {**{k: plan[k] for k in PLAN_CARD_KEYS}, "locked": plan["premium"] and not user.plans_unlocked,
+            "active": plan["id"] == user.active_plan_id}
+
+
+def pro_status(user: UserDoc) -> dict:
+    return {"unlocked": user.plans_unlocked, "price_inr": payments.PRO_PLANS_PRICE_PAISE // 100,
+            "payments_enabled": payments.enabled(), "plan_count": sum(1 for p in plans_data.PLANS if p["premium"])}
+
+
+def get_plan_or_404(plan_id: str) -> dict:
+    plan = plans_data.PLANS_BY_ID.get(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    return plan
+
+
+async def user_with_purchases(user_id: str) -> UserDoc:
+    user = await get_user_or_404(user_id)
+    if payments.enabled() and not user.plans_unlocked:
+        await reconcile_orders(user_id)
+        user = await get_user_or_404(user_id)
+    return user
+
+
+@api_router.get("/plans")
+async def list_plans(auth: dict = Depends(require_user)):
+    user = await user_with_purchases(auth["user_id"])
+    return {"plans": [plan_card(p, user) for p in plans_data.PLANS], "pro": pro_status(user),
+            "default_gender": "female" if user.gender == "female" else "male"}
+
+
+@api_router.post("/plans/pro/order")
+async def pro_plans_order(auth: dict = Depends(require_user)):
+    require_payments()
+    user = await user_with_purchases(auth["user_id"])
+    if user.plans_unlocked:
+        raise HTTPException(status_code=409, detail="Pro plans are already unlocked.")
+    return await start_order(user.user_id, "pro_plans")
+
+
+@api_router.post("/plans/active/stop")
+async def stop_plan(auth: dict = Depends(require_user)):
+    await get_user_or_404(auth["user_id"])
+    await db.users.update_one({"user_id": auth["user_id"]}, {"$set": {"active_plan_id": None}})
+    return {"active_plan_id": None}
+
+
+def demo_model(user: UserDoc) -> str:
+    return "female" if user.gender == "female" else "male"
+
+
+def plan_row(index: int, move: dict, current: str, swapped: bool, model: str) -> dict:
+    """One move of a plan day as the app lists it: the plan's sets and reps with the current exercise."""
+    if current in library.EX:
+        c = library.card(current, model)
+        photos = library.photos_for(current)
+        ex = {"name": c["name"], "muscle": c["target"], "equipment": c["equipment"], "level": c["level"],
+              "image": c["thumb"] or (photos[0] if photos else None), "similar": False}
+    else:
+        p = library.PHOTOS[current]
+        ex = {"name": p["name"], "muscle": p["primary_muscles"][0], "equipment": p["equipment"], "level": p["level"],
+              "image": p["images"][0], "similar": True}
+    return {**ex, "index": index, "id": current, "original_id": library.resolve_plan_move(move["id"]), "swapped": swapped,
+            "sets": move["sets"], "reps": move["reps"], "rest_sec": move["rest_sec"]}
+
+
+@api_router.get("/plans/{plan_id}")
+async def plan_detail(plan_id: str, auth: dict = Depends(require_user)):
+    plan = get_plan_or_404(plan_id)
+    user = await user_with_purchases(auth["user_id"])
+    card = plan_card(plan, user)
+    swaps = {} if card["locked"] else {
+        (s["day"], s["index"]): s["exercise_id"]
+        async for s in db.plan_swaps.find({"user_id": user.user_id, "plan_id": plan_id}, {"_id": 0})}
+    model = demo_model(user)
+    days = []
+    for d in plan["days"]:
+        exercises = [] if card["locked"] else [
+            plan_row(i, e, swaps.get((d["day"], i), library.resolve_plan_move(e["id"])), (d["day"], i) in swaps, model)
+            for i, e in enumerate(d["exercises"])]
+        days.append({"day": d["day"], "title": d["title"], "focus": d["focus"],
+                     "exercise_count": len(d["exercises"]), "exercises": exercises})
+    return {**card, "description": plan["description"], "days": days, "pro": pro_status(user)}
+
+
+class SwapBody(BaseModel):
+    exercise_id: str = Field(max_length=80)
+
+
+async def plan_slot(plan_id: str, day: int, index: int, user_id: str) -> tuple[dict, UserDoc]:
+    plan = get_plan_or_404(plan_id)
+    user = await user_with_purchases(user_id)
+    if plan["premium"] and not user.plans_unlocked:
+        raise HTTPException(status_code=403, detail="Unlock Pro plans to change this one.")
+    d = next((x for x in plan["days"] if x["day"] == day), None)
+    if not d or not 0 <= index < len(d["exercises"]):
+        raise HTTPException(status_code=404, detail="That move isn't in this plan.")
+    return d["exercises"][index], user
+
+
+@api_router.put("/plans/{plan_id}/days/{day}/exercises/{index}")
+async def swap_move(plan_id: str, day: int, index: int, body: SwapBody, auth: dict = Depends(require_user)):
+    move, user = await plan_slot(plan_id, day, index, auth["user_id"])
+    if body.exercise_id in library.EX:
+        new_id = library.canonical_id(body.exercise_id)
+    elif body.exercise_id in library.PHOTOS:
+        new_id = body.exercise_id
+    else:
+        raise HTTPException(status_code=404, detail="Exercise not found")
+    slot = {"user_id": user.user_id, "plan_id": plan_id, "day": day, "index": index}
+    if new_id == library.resolve_plan_move(move["id"]):
+        await db.plan_swaps.delete_one(slot)
+        return {"exercise_id": new_id, "swapped": False}
+    await db.plan_swaps.update_one(slot, {"$set": {**slot, "exercise_id": new_id, "updated_at": now_utc().isoformat()}}, upsert=True)
+    return {"exercise_id": new_id, "swapped": True}
+
+
+@api_router.delete("/plans/{plan_id}/days/{day}/exercises/{index}")
+async def reset_move(plan_id: str, day: int, index: int, auth: dict = Depends(require_user)):
+    move, user = await plan_slot(plan_id, day, index, auth["user_id"])
+    await db.plan_swaps.delete_one({"user_id": user.user_id, "plan_id": plan_id, "day": day, "index": index})
+    return {"exercise_id": library.resolve_plan_move(move["id"]), "swapped": False}
+
+
+@api_router.post("/plans/{plan_id}/start")
+async def start_plan(plan_id: str, auth: dict = Depends(require_user)):
+    plan = get_plan_or_404(plan_id)
+    user = await user_with_purchases(auth["user_id"])
+    if plan["premium"] and not user.plans_unlocked:
+        raise HTTPException(status_code=403, detail="Unlock Pro plans to start this one.")
+    await db.users.update_one({"user_id": user.user_id}, {"$set": {"active_plan_id": plan_id}})
+    return {"active_plan_id": plan_id}
+
+
+@api_router.get("/library")
+async def exercise_library(auth: dict = Depends(require_user)):
+    return library.library(demo_model(await get_user_or_404(auth["user_id"])))
+
+
+@api_router.get("/exercises/{exercise_id}")
+async def exercise_detail(exercise_id: str, model: Optional[Literal["male", "female"]] = None,
+                          auth: dict = Depends(require_user)):
+    user = await get_user_or_404(auth["user_id"])
+    if exercise_id in library.EX:
+        return await library.detail(exercise_id, model or demo_model(user), library.photos_for(exercise_id))
+    if exercise_id in library.PHOTOS:
+        match = library.PLAN_MATCH.get(exercise_id)
+        if match:  # an old plan id that now has a WorkoutX version
+            return await library.detail(match, model or demo_model(user), library.photos_for(match))
+        return library.photo_exercise(exercise_id)
+    raise HTTPException(status_code=404, detail="Exercise not found")
+
+
+@api_router.get("/exercises/{exercise_id}/alternatives")
+async def exercise_alternatives(exercise_id: str, plan_id: Optional[str] = None, auth: dict = Depends(require_user)):
+    user = await get_user_or_404(auth["user_id"])
+    if exercise_id not in library.EX and exercise_id not in library.PHOTOS:
+        raise HTTPException(status_code=404, detail="Exercise not found")
+    level = library.level_of_plan(get_plan_or_404(plan_id)["level"]) if plan_id else None
+    model = demo_model(user)
+    return {"items": [library.card(i, model) for i in library.alternatives(exercise_id, level)]}
+
+
 @api_router.get("/leaderboard")
 async def leaderboard(scope: Literal["city", "all"] = "city", auth: dict = Depends(require_user)):
     me = await get_user_or_404(auth["user_id"])
@@ -420,6 +789,7 @@ app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=["*"], 
 @app.on_event("startup")
 async def start_index_build():
     app.state.index_task = asyncio.create_task(ensure_indexes())
+    await library.init(db)
 
 
 @app.on_event("shutdown")

@@ -1,0 +1,39 @@
+{
+  "summary": "Retest of the iteration_3 fixes. All 4 fixes are verified. (1) Candidate 'Use this in my plan' (exercise-use-button) now lands on plan-screen with the SWAPPED tag and no stale exercise screen. Tested from 3 entry points: plan > exercise > Alternatives > preview; plan row Alternatives > preview (both plans lean-machine and peach-protocol, deep link and real stack); and the sheet's alternative-use-0 from the exercise screen. exercise-reset-button also returns to the plan, plan-back goes to the Plans tab, and preview > back > back returns to the plan. (2) Contrast: the LevelChip has dark #111118 text on green (#34C759) and amber (#FF9F0A), about 9.5:1. The sheet 'Use' button is the dark variant. (3) The library has 2 chip rows: muscle, then level and equipment with a divider. Chips are 36px tall with 4px hitSlop above and below (44 effective) and an 8px row gap. Filters work: Chest 159, +Beginner 59, +Assisted 0, reset 1904. Search for 'bench press' returns 26. Exercises opened from the library show no Use buttons. (4) Backend: GET /api/exercises/Barbell_Squat returns the WorkoutX match ex_NEMYLA with a video and source=workoutx. Pytest test_gymproof_library.py: 20/20 passed (new test added). NEW HIGH ISSUE: during the run, the WorkoutX media CDN started returning 429 rate_limited ('Too many media requests from this account') for every signed poster and mp4 link. All library and plan thumbnails, the Alternatives sheet thumbnails and the exercise video are now blank grey boxes with no fallback and no message. Deprecated packages: none detected (no expo-av, expo-barcode-scanner or expo-background-fetch).",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "WorkoutX media CDN (signed links cached in wx_media)", "issue": "Every poster and mp4 link (e.g. ex_KBNZCJ wm-poster.jpg) returns 429 {error: rate_limited, 'Too many media requests from this account'}. WorkoutX docs say this is a bulk-download penalty that pauses the account for about 1 hour. wx_media holds 2764 fresh signed links, which suggests links were prefetched for the whole catalogue (docs say not to pre-fetch every media link at once). Also, the library list serves signed posters for all 1904 rows, so scrolling or filtering pulls many posters quickly.", "priority": "HIGH"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ExerciseThumb (LevelChip.tsx)", "issue": "There is no onError fallback. When a poster fails (429 or an expired link), expo-image shows an empty grey box instead of the barbell placeholder. Seen in the library, plan rows and the Alternatives sheet.", "testID": "library-item-*, plan-exercise-*", "priority": "HIGH"},
+      {"component": "ExerciseDemo", "issue": "When the video and poster fail and there are no photos, the frame stays blank. 'Demo unavailable right now' (exercise-demo-none) is never shown, and no <video> element was rendered. Show the unavailable message or fall back to free-exercise-db photos when media errors.", "testID": "exercise-screen", "priority": "MEDIUM"},
+      {"component": "plan/[id].tsx back button", "issue": "On a deep-linked /plan/:id with no history, the back button does nothing ('GO_BACK was not handled'). Use router.canGoBack() ? back() : replace('/plans').", "testID": "plan-back-button", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Plans > Library", "issues": ["Level and equipment share one horizontal row. Once the user scrolls to equipment, the selected level chip scrolls out of view, so the active level filter is hidden. Consider a small 'filters active' summary or a clear-all chip.", "Only about 3.5 rows are visible at 375x667 below the header (search + 2 chip rows + count). This is acceptable."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_gymproof_library.py", "/app/test_reports/pytest/pytest_results_iter4.xml", "/app/backend/tests/check_library_thumbs.py", "/app/backend/tests/check_media_cache.py", "/app/backend/tests/demo_user_state.py"],
+  "action_items": [
+    "HIGH: WorkoutX media is rate_limited (429) for the account. Check for bulk prefetching: wx_media has 2764 fresh links, and scripts/fetch_workoutx.py may fetch media for the whole catalogue. Fetch links lazily per opened exercise only, as the WorkoutX ToS says. Consider not serving posters for all 1904 library rows: use thumbs only for visible rows or plan and alternative rows, or fall back to free-exercise-db photos and icons.",
+    "HIGH: Add an onError fallback in ExerciseThumb that switches to the barbell placeholder, and in ExerciseDemo show exercise-demo-none or photos when the poster fails too.",
+    "LOW: plan-back-button fallback when the history stack is empty (deep link)."
+  ],
+  "critical_code_review_comments": [
+    "exercise/[id].tsx backToPlan uses router.dismissTo({pathname:'/plan/[id]', params:{id}}). This is correct and verified. It relies on planId always being present, which is true wherever a slot exists.",
+    "The frontend env key is EXPO_PUBLIC_BACKEND_URL, not EXPO_BACKEND_URL. The tests use EXPO_PUBLIC_BACKEND_URL.",
+    "The console shows a 'No available adapters.' warning on the exercise screen. It is probably from expo-video or the sheet on web and is harmless, but worth checking."
+  ],
+  "updated_files": ["/app/backend/tests/test_gymproof_library.py (added test_detail_plan_id_resolves_to_workoutx)", "/app/backend/tests/check_media_cache.py (new helper)", "/app/backend/tests/check_library_thumbs.py (new helper)", "/app/backend/tests/demo_user_swaps.py (new helper, unused)", "/app/backend/tests/demo_user_state.py (new helper)"],
+  "success_rate": {"backend": "100% (20/20)", "frontend": "100% of retested fixes; media display is broken by the WorkoutX 429"},
+  "seed_data_creation": "None. Swaps were created on demo user +12015550100 (lean-machine day1 #0, peach-protocol day1 #0) and all were reset; verified 0 swaps remain.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Login: get-started-button, country-code-input '+1', phone-input '2015550100', code-input 424242. The demo user is female, so the Plans tab shows female plans (peach-protocol); lean-machine works by deep link. Use :visible selectors because stacked screens stay in the DOM. Wait about 1.2s after the Alternatives sheet opens. Before judging thumbnails, check WorkoutX media status: run python /app/backend/tests/check_library_thumbs.py. A 429 rate_limited means the account is paused for about 1h, and blank thumbs are then expected. Avoid repeatedly opening the Library tab, because it loads many posters.",
+  "rca_of_issue": "Blank media: the WorkoutX CDN returns 429 rate_limited for this account (not an app crash). The trigger is likely bulk access: all-catalogue link prefetch (2764 cached links) plus the library list loading posters for many rows during repeated test sessions. The UI has no image error fallback, so the failures show as empty boxes. Reproduce with python /app/backend/tests/check_library_thumbs.py: every thumb returns 429."
+}
