@@ -6,6 +6,7 @@ import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
+import { useAppSession } from "@/src/auth/AppSession";
 import { PrimaryButton, Hexagon } from "@/src/components/ui";
 import { makeStyles, spacing, useTheme } from "@/src/theme";
 
@@ -16,6 +17,7 @@ export default function Welcome() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { googleSignIn, googleBusy, googleError } = useAppSession();
   return (
     <View style={styles.root} testID="welcome-screen">
       <Image source={{ uri: BG }} style={styles.bg} contentFit="cover" transition={300} />
@@ -42,8 +44,15 @@ export default function Welcome() {
             </View>
           ))}
         </Animated.View>
-        <Animated.View entering={FadeInDown.delay(400).duration(500)}>
-          <PrimaryButton testID="get-started-button" label="Get Started" variant="brand" onPress={() => router.push("/sign-in")} />
+        <Animated.View entering={FadeInDown.delay(400).duration(500)} style={styles.buttons}>
+          <PrimaryButton testID="get-started-button" label="Continue with phone" variant="brand" onPress={() => router.push("/sign-in")}
+            icon={<Ionicons name="call" size={18} color={colors.onBrandPrimary} />} />
+          <PrimaryButton testID="google-sign-in-button" label="Continue with Google" variant="light" loading={googleBusy} onPress={googleSignIn}
+            icon={<Ionicons name="logo-google" size={18} color={colors.onSurface} />} />
+          <PrimaryButton testID="email-sign-in-button" label="Continue with email" variant="light" onPress={() => router.push("/email-sign-in")}
+            icon={<Ionicons name="mail" size={18} color={colors.onSurface} />} />
+          {!!googleError && <Text style={styles.err} testID="google-sign-in-error">{googleError}</Text>}
+          <Text style={styles.note}>Phone, Google and email are separate accounts.</Text>
         </Animated.View>
       </View>
     </View>
@@ -59,6 +68,9 @@ const useStyles = makeStyles((c) => ({
   kicker: { color: c.brandSecondary, fontWeight: "900", letterSpacing: 2, fontSize: 13, marginBottom: spacing.sm },
   title: { color: c.onSurfaceInverse, fontSize: 40, lineHeight: 44, fontWeight: "900" },
   points: { gap: spacing.md, marginVertical: spacing.xl },
+  buttons: { gap: spacing.sm },
+  err: { color: c.brandSecondary, fontWeight: "700", textAlign: "center" },
+  note: { color: c.onSurfaceInverse, opacity: 0.7, fontSize: 12, fontWeight: "600", textAlign: "center", marginTop: spacing.xs },
   point: { flexDirection: "row", alignItems: "center", gap: spacing.md },
   pointText: { color: c.onSurfaceInverse, fontSize: 15, fontWeight: "600", flex: 1 },
 }));

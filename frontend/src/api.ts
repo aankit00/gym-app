@@ -1,11 +1,11 @@
 import { useCallback } from "react";
-import { useAuth } from "@clerk/expo";
+import { useSession } from "@/src/auth/useSession";
 
 export const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
 export const tzOffsetMin = () => -new Date().getTimezoneOffset();
 
 export function useApi() {
-  const { getToken } = useAuth();
+  const { getToken, onUnauthorized } = useSession();
   const authHeader = useCallback(async () => ({ Authorization: `Bearer ${await getToken()}` }), [getToken]);
   const call = useCallback(
     async <T = any>(path: string, init: { method?: string; body?: any } = {}): Promise<T> => {
@@ -17,10 +17,11 @@ export function useApi() {
         body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
       });
       const data = await res.json().catch(() => ({}));
+      if (res.status === 401) onUnauthorized();
       if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : `Request failed (${res.status})`);
       return data as T;
     },
-    [authHeader],
+    [authHeader, onUnauthorized],
   );
   return { call, authHeader };
 }

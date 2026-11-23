@@ -3,6 +3,7 @@ import { ActivityIndicator, RefreshControl, ScrollView, Text, View } from "react
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Svg, { Circle } from "react-native-svg";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
+import { useRouter } from "expo-router";
 import { useDashboard } from "@/src/useDashboard";
 import WeekRow from "@/src/components/WeekRow";
 import { BigTitle, Card, PrimaryButton, SectionTitle, Segmented } from "@/src/components/ui";
@@ -29,12 +30,16 @@ export default function Stats() {
   const insets = useSafeAreaInsets();
   const { data, error, refreshing, refresh, reload } = useDashboard();
   const [tab, setTab] = useState("stats");
+  const router = useRouter();
   const bottomChrome = usesNativeTabs ? insets.bottom : 0;
 
   return (
     <View style={styles.root}>
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <BigTitle text="Statistics" testID="stats-title" right={<Ionicons name="gift" size={28} color={colors.brandPrimary} />} />
+        <BigTitle text="Statistics" testID="stats-title" right={
+          <PrimaryButton testID="open-recap-button" label="Recap" variant="brand" onPress={() => router.push("/recap")}
+            icon={<Ionicons name="sparkles" size={16} color={colors.onBrandPrimary} />} />
+        } />
         <Segmented testIDPrefix="stats-tab" value={tab} onChange={setTab}
           options={[{ key: "stats", label: "Statistics" }, { key: "awards", label: "Achievements" }]} />
       </View>

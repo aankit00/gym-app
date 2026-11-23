@@ -3,7 +3,8 @@ import { Redirect, Stack, usePathname } from "expo-router";
 import { LogBox, StyleSheet } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
-import { useAuth } from "@clerk/expo";
+import { AppSessionProvider } from "@/src/auth/AppSession";
+import { useSession } from "@/src/auth/useSession";
 
 import { ErrorBoundary } from "@/src/components/error-boundary";
 import { queryClient } from "@/src/query-client";
@@ -11,10 +12,10 @@ import ClerkAuthProvider from "@/src/auth/ClerkAuthProvider";
 
 LogBox.ignoreAllLogs(true);
 
-const PUBLIC_PATHS = ["/", "/sign-in"];
+const PUBLIC_PATHS = ["/", "/sign-in", "/email-sign-in"];
 
 function AuthGate() {
-  const { isLoaded, isSignedIn } = useAuth();
+  const { isLoaded, isSignedIn } = useSession();
   const pathname = usePathname();
   if (!isLoaded) return null;
   if (!isSignedIn && !PUBLIC_PATHS.includes(pathname)) return <Redirect href="/" />;
@@ -23,6 +24,7 @@ function AuthGate() {
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="prove" options={{ presentation: "fullScreenModal", animation: "slide_from_bottom" }} />
       <Stack.Screen name="freeze" options={{ presentation: "modal" }} />
+      <Stack.Screen name="recap" options={{ presentation: "modal" }} />
     </Stack>
   );
 }
@@ -30,6 +32,7 @@ function AuthGate() {
 export default function RootLayout() {
   return (
     <ClerkAuthProvider>
+      <AppSessionProvider>
       <GestureHandlerRootView style={styles.root}>
         <ErrorBoundary>
           <QueryClientProvider client={queryClient}>
@@ -39,6 +42,7 @@ export default function RootLayout() {
           </QueryClientProvider>
         </ErrorBoundary>
       </GestureHandlerRootView>
+      </AppSessionProvider>
     </ClerkAuthProvider>
   );
 }

@@ -24,9 +24,13 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 try:  # launched as `backend.server` (the default)
-    from backend.clerk_auth import clerk_router, require_user
+    from backend import app_auth
+    from backend.clerk_auth import clerk_router
 except ModuleNotFoundError:  # launched from inside backend/ as `server`
-    from clerk_auth import clerk_router, require_user
+    import app_auth
+    from clerk_auth import clerk_router
+
+require_user = app_auth.require_user
 
 try:
     from backend import library, payments, plans_data
@@ -66,6 +70,8 @@ INDEXES: dict[str, list[IndexModel]] = {
     "plan_swaps": [IndexModel([("user_id", ASCENDING), ("plan_id", ASCENDING), ("day", ASCENDING), ("index", ASCENDING)],
                               name="user_plan_slot", unique=True)],
     "wx_media": [IndexModel([("id", ASCENDING)], name="id", unique=True)],
+    "ai_checks": [IndexModel([("user_id", ASCENDING), ("at", DESCENDING)], name="user_at"),
+                  IndexModel([("at", ASCENDING)], name="ttl", expireAfterSeconds=2 * 86400)],
 }
 
 
@@ -91,6 +97,9 @@ api_router = APIRouter(prefix="/api")
 
 XP_PER_PROOF = 100
 XP_WEEK_BONUS = 250
+DAILY_PHOTO_CHECKS = 5  # AI photo checks per member per 24 hours
+GLOBAL_CHECKS_PER_HOUR = 1500  # safety cap across all members on the shared AI budget
+MIN_HOURS_BETWEEN_COUNTED = 12  # anchors "one visit a day" on the server, whatever timezone the phone reports
 CHALLENGE_TTL_SEC = 120
 MILESTONES = [4, 8, 12, 26]
 LEVEL_XP = 500
@@ -105,7 +114,7 @@ class Profile(BaseModel):
     goal: Literal["lean_muscle", "fat_loss", "strength", "stay_fit"]
     weekly_target: int = Field(ge=2, le=5)
     city: str = Field(min_length=1, max_length=60)
-    tz_offset_min: int = 0  # minutes to add to UTC to get local time
+    tz_offset_min: int = Field(default=0, ge=-720, le=840)  # minutes to add to UTC to get local time (real zones only)
 
 
 class ProfileUpdate(BaseModel):
@@ -113,7 +122,7 @@ class ProfileUpdate(BaseModel):
     weekly_target: Optional[int] = Field(default=None, ge=2, le=5)
     city: Optional[str] = Field(default=None, min_length=1, max_length=60)
     goal: Optional[Literal["lean_muscle", "fat_loss", "strength", "stay_fit"]] = None
-    tz_offset_min: Optional[int] = None
+    tz_offset_min: Optional[int] = Field(default=None, ge=-720, le=840)
 
 
 class UserDoc(BaseModel):
@@ -382,9 +391,10 @@ async def root():
 @api_router.get("/me")
 async def get_me(auth: dict = Depends(require_user)):
     doc = await db.users.find_one({"user_id": auth["user_id"]}, {"_id": 0})
+    account = await app_auth.account_of(auth["user_id"])  # email/Google sign-ins; None for phone
     if not doc:
-        return {"onboarded": False, "profile": None}
-    return {"onboarded": True, "profile": UserDoc.from_mongo(doc).model_dump()}
+        return {"onboarded": False, "profile": None, "account": account}
+    return {"onboarded": True, "profile": UserDoc.from_mongo(doc).model_dump(), "account": account}
 
 
 @api_router.post("/me")
@@ -409,7 +419,7 @@ async def update_me(body: ProfileUpdate, auth: dict = Depends(require_user)):
 
 
 @api_router.get("/dashboard")
-async def dashboard(tz_offset_min: Optional[int] = None, auth: dict = Depends(require_user)):
+async def dashboard(tz_offset_min: Optional[int] = Query(None, ge=-720, le=840), auth: dict = Depends(require_user)):
     user = await get_user_or_404(auth["user_id"])
     if tz_offset_min is not None and tz_offset_min != user.tz_offset_min:
         await db.users.update_one({"user_id": user.user_id}, {"$set": {"tz_offset_min": tz_offset_min}})
@@ -423,10 +433,20 @@ async def dashboard(tz_offset_min: Optional[int] = None, auth: dict = Depends(re
 @api_router.post("/proof/challenge")
 async def proof_challenge(auth: dict = Depends(require_user)):
     await get_user_or_404(auth["user_id"])
+    await check_photo_budget(auth["user_id"])
     ch = {"id": str(uuid.uuid4()), "user_id": auth["user_id"], "issued_at": now_utc().isoformat(),
           "expires_at": (now_utc() + timedelta(seconds=CHALLENGE_TTL_SEC)).isoformat(), "used": False}
     await db.challenges.insert_one(dict(ch))
     return {"challenge_id": ch["id"], "expires_at": ch["expires_at"], "ttl_sec": CHALLENGE_TTL_SEC}
+
+
+async def check_photo_budget(user_id: str) -> None:
+    now = now_utc()
+    used = await db.ai_checks.count_documents({"user_id": user_id, "at": {"$gte": now - timedelta(hours=24)}})
+    if used >= DAILY_PHOTO_CHECKS:
+        raise HTTPException(status_code=429, detail=f"You've used your {DAILY_PHOTO_CHECKS} photo checks for today. Try again tomorrow.")
+    if await db.ai_checks.count_documents({"at": {"$gte": now - timedelta(hours=1)}}) >= GLOBAL_CHECKS_PER_HOUR:
+        raise HTTPException(status_code=503, detail="Photo checks are busy right now. Try again in a few minutes.")
 
 
 @api_router.post("/proof/submit")
@@ -477,11 +497,14 @@ async def proof_submit(challenge_id: str = Form(...), captured_at: str = Form(..
         await db.proofs.insert_one(dict(proof))
         return {k: v for k, v in proof.items() if k not in ("phash", "user_id")}
 
-    # 4. AI check
+    # 4. AI check (counted against the daily budget before the paid call)
+    await check_photo_budget(user.user_id)
+    check = await db.ai_checks.insert_one({"user_id": user.user_id, "at": now_utc()})
     try:
         v = await ai_verify(buf.getvalue())
     except Exception as exc:
         logger.exception("AI verify failed: %s", exc)
+        await db.ai_checks.delete_one({"_id": check.inserted_id})  # our failure shouldn't use up the member's checks
         raise HTTPException(status_code=502, detail="AI couldn't check the photo right now. Try again.")
 
     if v.get("is_photo_of_screen_or_print"):
@@ -498,7 +521,9 @@ async def proof_submit(challenge_id: str = Form(...), captured_at: str = Form(..
                  confidence=v.get("confidence"))
 
     if status == "accepted":
-        already = await db.proofs.find_one({"user_id": user.user_id, "local_date": proof["local_date"], "counted": True})
+        already = await db.proofs.find_one({"user_id": user.user_id, "counted": True, "$or": [
+            {"local_date": proof["local_date"]},
+            {"created_at": {"$gte": (now - timedelta(hours=MIN_HOURS_BETWEEN_COUNTED)).isoformat()}}]})
         if already:
             proof["already_counted_today"] = True
         else:
@@ -766,6 +791,40 @@ async def exercise_alternatives(exercise_id: str, plan_id: Optional[str] = None,
     return {"items": [library.card(i, model) for i in library.alternatives(exercise_id, level)]}
 
 
+@api_router.get("/recap")
+async def monthly_recap(month: Optional[str] = Query(None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$"), auth: dict = Depends(require_user)):
+    """Shareable month summary: verified visits, XP earned and how many weeks hit the weekly target."""
+    user = await get_user_or_404(auth["user_id"])
+    today = local_today(user.tz_offset_min)
+    first = date.fromisoformat(f"{month}-01") if month else today.replace(day=1)
+    if first > today:
+        raise HTTPException(status_code=400, detail="That month hasn't started yet.")
+    nxt = (first.replace(day=28) + timedelta(days=4)).replace(day=1)
+    last = min(nxt - timedelta(days=1), today)
+    proofs = await db.proofs.find(
+        {"user_id": user.user_id, "counted": True, "local_date": {"$gte": first.isoformat(), "$lte": last.isoformat()}},
+        {"_id": 0, "local_date": 1, "xp_awarded": 1}).to_list(100)
+    days = sorted({date.fromisoformat(p["local_date"]) for p in proofs})
+    # weeks (Mon-Sun) that started inside this month and have ended or are this week
+    weeks, w = [], week_start(first) if week_start(first) == first else week_start(first) + timedelta(days=7)
+    while w <= last:
+        weeks.append(w)
+        w += timedelta(days=7)
+    hit = sum(1 for wk in weeks if sum(1 for d in days if week_start(d) == wk) >= user.weekly_target)
+    busiest = max(range(7), key=lambda i: (sum(1 for d in days if d.weekday() == i), -i)) if days else None
+    stats = await compute_stats(user)
+    return {
+        "month": first.strftime("%Y-%m"), "label": first.strftime("%B %Y"), "name": user.name, "city": user.city,
+        "visits": len(days), "xp": sum(p.get("xp_awarded", 0) for p in proofs),
+        "weeks_hit": hit, "weeks_total": len(weeks), "weekly_target": user.weekly_target,
+        "consistency": round(100 * hit / len(weeks)) if weeks else 0,
+        "streak_weeks": stats["streak_weeks"], "level": stats["level"],
+        "active_days": [d.isoformat() for d in days], "days_in_month": (nxt - timedelta(days=1)).day,
+        "first_weekday": first.weekday(), "busiest_day": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][busiest] if busiest is not None else None,
+        "in_progress": last == today and nxt > today,
+    }
+
+
 @api_router.get("/leaderboard")
 async def leaderboard(scope: Literal["city", "all"] = "city", auth: dict = Depends(require_user)):
     me = await get_user_or_404(auth["user_id"])
@@ -782,13 +841,21 @@ async def leaderboard(scope: Literal["city", "all"] = "city", auth: dict = Depen
 
 app.include_router(api_router)
 app.include_router(clerk_router)
+app.include_router(app_auth.router)
 
-app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# The web app is served from the same origin as /api and phones send no Origin, so only Emergent preview/deploy
+# hosts (plus any CORS_ORIGINS) may call cross-origin. Auth is a Bearer header, so no cookies are allowed.
+app.add_middleware(CORSMiddleware, allow_credentials=False,
+                   allow_origins=[o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip() and o.strip() != "*"],
+                   allow_origin_regex=r"https://[a-z0-9-]+\.(preview\.emergentagent\.com|emergent\.host|emergentagent\.com)",
+                   allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"], allow_headers=["Authorization", "Content-Type"])
 
 
 @app.on_event("startup")
 async def start_index_build():
     app.state.index_task = asyncio.create_task(ensure_indexes())
+    app_auth.init(db)
+    await app_auth.ensure_indexes()
     await library.init(db)
 
 

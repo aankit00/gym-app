@@ -1,0 +1,47 @@
+{
+  "summary": "Iteration 5 tested email auth, Google session exchange, auth isolation, the monthly recap, the photo-check rate limit, tz validation and CORS. Testing covered the backend through pytest (21/21 pass on the public URL) and the frontend through Playwright on a 375x667 viewport. CRITICAL FE BUG (FIXED BY TESTER): useSession.getToken listed the whole useAuth() object as a dependency. That object is new on every render, so getToken and call changed identity every render and each screen's load effect refetched in a loop. Measured with an email session: 125 /api/dashboard calls in 5s idle on Home and 187 /api/recap calls in 5s on Recap. The ingress then returned 429 ('Request failed (429)' on the recap screen). After the fix, 0 extra calls while idle, for both email and phone sessions. CRITICAL BE BUG (not fixed): the login lockout's per-IP key uses request.client.host. Behind the ingress this is the ingress pod IP (seen 10.11.1.88 and 10.11.1.89), so 5 bad logins from anyone lock out every email user for 15 minutes. This was reproduced: a different user's correct password got 429. Working: register, 409 on a duplicate (case-insensitive), 422 on invalid input, login, 401 on a wrong password, 429 after 5 failures, HS256 token, email_ user ids, /me with provider=email, onboarding, dashboard. Garbage, tampered and forged (wrong secret) tokens get 401. A Clerk phone token still works and returns account=null. The __session cookie alone gets 401. /auth/session with a bogus id gets 401; /auth/logout returns ok. Recap: current month, month=2025-06 (June 2025, 30 days), 400 for a future month, 422 for a bad format. /proof/challenge returns 429 once 5 ai_checks docs exist in 24h. tz 5000 and -800 get 422 and 840 is accepted. The app's CORS preflight rejects evil.com and allows the preview origin, with no credentials header. Frontend: the welcome screen shows 3 buttons and the separate-accounts note. On the email screen, the segmented control, password toggle and errors (wrong password, duplicate) work. Register leads to onboarding and then Home. Me shows the email. Sign-out returns to Welcome, signing back in works, and the session survives a reload. Phone login (+1 2015550100, OTP 424242) still works: Home, Me showing the phone number, Recap, and sign-out. Recap: prev goes to October 2026, next returns, next is disabled (aria-disabled) on the current month, and close returns to Stats. Web Share shows 'Couldn't share right now' in a browser without navigator.share. Deprecated packages: none detected (no expo-av, expo-barcode-scanner or expo-background-fetch).",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/auth/login (app_auth._ip)", "issue": "The per-IP lockout key is request.client.host, which is the ingress pod IP (10.11.1.88/10.11.1.89), not the client's IP. Five bad logins from anyone (spread across any emails) lock out ALL email users for 15 minutes, which is a trivial DoS. Reproduced: after the lockout test, a different account's correct password returned 429. Fix: use the first X-Forwarded-For hop, as clerk_auth._client_ip does, or run uvicorn with --proxy-headers --forwarded-allow-ips='*'. Reference: /app/backend/app_auth.py:58-59,113", "priority": "CRITICAL"}
+    ],
+    "minor": [
+      {"endpoint": "CORS (infra)", "issue": "The app's CORSMiddleware is correct: evil.com preflight gets 400 with no ACAO, and the preview origin is echoed back. However, the preview ingress itself adds 'access-control-allow-origin: *' to simple GET responses, so on the public URL a simple GET from evil.com still gets a wildcard ACAO. Bearer auth with no cookies limits the impact. This is infra only, not an app-code issue."},
+      {"endpoint": "POST /api/auth/register", "issue": "No rate limit on account creation, so bcrypt(12) hashing can be spammed for CPU load. Consider a per-IP limit (using the real client IP)."},
+      {"endpoint": "POST /api/auth/logout (email)", "issue": "This is a no-op server-side for email JWTs. A 30-day token stays valid after logout and cannot be revoked. Consider a token version or jti denylist."},
+      {"endpoint": "POST /api/proof/submit", "issue": "The ai_checks doc is inserted before the AI call, so an AI failure (502) still uses up 1 of the user's 5 daily checks. Consider deleting it on exception."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "useSession.getToken / useApi.call", "issue": "FIXED BY TESTER. The useCallback deps included the whole useAuth() object, which changes every render, so every screen's load effect refetched in a loop (125 dashboard calls and 187 recap calls in 5s). This led to 429s from the ingress and flicker (the recap share button kept detaching). The deps are now clerk.getToken and clerk.signOut.", "testID": "recap-screen, home-title", "priority": "CRITICAL"},
+      {"component": "Recap share on web", "issue": "Share.share relies on navigator.share, which is missing on desktop Chrome/Firefox on Linux and Windows and in headless browsers. Users see 'Couldn't share right now. Try again.' Add a fallback that copies the text to the clipboard (expo-clipboard) and shows a 'Copied' toast.", "testID": "recap-share-button", "priority": "MEDIUM"},
+      {"component": "Welcome after sign-out", "issue": "One tap on email-sign-in-button made immediately after Welcome rendered (right after sign-out) did not navigate. It worked after a 1.5s wait, so this is a timing flake with the redirect or entering animation.", "testID": "email-sign-in-button", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "email-sign-in", "issues": ["password-input has no right padding for the absolutely positioned 44px eye toggle, so long passwords run underneath the icon (add paddingRight ~56)."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_gymproof_auth_recap.py", "/app/backend/tests/check_ip_lockout.py", "/app/test_reports/pytest/pytest_iter5.xml"],
+  "action_items": [
+    "CRITICAL: fix the per-IP login lockout key in app_auth._ip to use the real client IP (first X-Forwarded-For hop) so one attacker cannot lock out all email users.",
+    "Review the tester's fix in /app/frontend/src/auth/useSession.ts: the deps are now clerkGetToken and clerkSignOut instead of the whole useAuth() object. Keep any future hooks off unstable objects.",
+    "Add a clipboard fallback for web Recap share when navigator.share is unavailable.",
+    "Add paddingRight to the password input so text does not sit under the eye icon.",
+    "Optional: rate-limit /auth/register; make email logout revoke the token; refund the ai_checks doc when the AI call fails."
+  ],
+  "critical_code_review_comments": [
+    "app_auth._ip uses request.client.host behind the k8s ingress, so every client shares the ingress pod IP.",
+    "useSession: useAuth() returns a new object each render; depending on it breaks the memoisation of getToken, call and every load callback.",
+    "server.py is 867 lines (over 700); consider splitting the recap, proof and plans routes into modules.",
+    "Clerk issuer check and Bearer-only auth look correct. The alg 'none' or unknown-alg path falls through to Clerk JWKS verification and returns 401."
+  ],
+  "updated_files": ["/app/frontend/src/auth/useSession.ts", "/app/backend/tests/test_gymproof_auth_recap.py", "/app/backend/tests/check_ip_lockout.py"],
+  "success_rate": {"backend": "95% (21/21 pytest pass; 1 critical design bug with the per-IP lockout, reproduced separately)", "frontend": "92% (all requested flows pass after the getToken loop fix; web share falls back to an error)"},
+  "seed_data_creation": "No seed data. TEST email accounts (test_a_*, test_lock_*, test_victim_*, test_ui_f67b6a@example.com), their profiles and ai_checks docs were deleted by user_id. auth_attempts entries for test emails, qa.email and the ingress-IP keys were removed. qa.email@example.com was left untouched apart from 1 wrong-password attempt, which was cleared. The phone user +12015550100 (Demo Lifter) was not modified.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run python -m pytest tests/test_gymproof_auth_recap.py (pytest.ini adds xdist flags; run without -p no:xdist). It needs /app/backend/.env loaded via dotenv only for MONGO_URL/DB_NAME. The lockout test cleans ip:* keys. After the IP fix, test_login_lockout_after_5 should still pass. check_ip_lockout.py shows the ingress IPs. Web share cannot succeed in headless Chromium. Do not call the real AI repeatedly.",
+  "rca_of_issue": "Request loop: useSession.getToken = useCallback(..., [token, clerk]) where clerk = useAuth() is a fresh object each render. useApi.call depends on getToken, and screens use useCallback(load, [call]) with useEffect(load), so load -> setState -> re-render -> new call -> load repeats. Fix: depend on clerk.getToken and clerk.signOut (stable). Lockout: _ip() returns the peer address, which is the ingress pod (uvicorn runs without --proxy-headers for that peer), so the 'ip:' key is shared by all users. Mitigation: use X-Forwarded-For."
+}

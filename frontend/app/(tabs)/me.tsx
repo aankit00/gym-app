@@ -1,7 +1,8 @@
 import React, { useCallback, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
 import { useFocusEffect } from "expo-router";
-import { useAuth, useUser } from "@clerk/expo";
+import { useUser } from "@clerk/expo";
+import { useSession } from "@/src/auth/useSession";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { useApi } from "@/src/api";
@@ -19,7 +20,8 @@ export default function Me() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const { call } = useApi();
-  const { signOut } = useAuth();
+  const { signOut } = useSession();
+  const [account, setAccount] = useState<{ email: string; provider: string } | null>(null);
   const { user } = useUser();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [proofs, setProofs] = useState<Proof[]>([]);
@@ -30,8 +32,9 @@ export default function Me() {
   const load = useCallback(async () => {
     try {
       setError("");
-      const [me, p] = await Promise.all([call<{ profile: Profile }>("/me"), call<Proof[]>("/proofs?limit=10")]);
+      const [me, p] = await Promise.all([call<{ profile: Profile; account: { email: string; provider: string } | null }>("/me"), call<Proof[]>("/proofs?limit=10")]);
       setProfile(me.profile);
+      setAccount(me.account);
       setProofs(p);
     } catch (e: any) {
       setError(e.message);
@@ -68,7 +71,7 @@ export default function Me() {
             <View style={styles.avatar}><Text style={styles.avatarText}>{profile.name.slice(0, 1).toUpperCase()}</Text></View>
             <View style={{ flex: 1 }}>
               <Text style={styles.name} testID="profile-name">{profile.name}</Text>
-              <Text style={styles.meta}>{profile.city} · {user?.primaryPhoneNumber?.phoneNumber ?? ""}</Text>
+              <Text style={styles.meta}>{profile.city} · {account?.email ?? user?.primaryPhoneNumber?.phoneNumber ?? ""}</Text>
               <Text style={styles.meta}>{profile.age} yrs · {profile.height_cm} cm · {GOAL_LABEL[profile.goal]}</Text>
             </View>
             <View style={styles.xp}><Text style={styles.xpText} testID="profile-xp">{profile.xp}</Text><Text style={styles.xpLabel}>XP</Text></View>

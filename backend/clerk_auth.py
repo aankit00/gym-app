@@ -2,6 +2,7 @@
 are set: /api/clerk/config for the app, the /api/__clerk production relay
 (zero DNS per app), and the require_user dependency for protected routes."""
 
+import base64
 import os
 from functools import lru_cache
 
@@ -109,13 +110,26 @@ def _jwks_client(secret_key: str) -> jwt.PyJWKClient:
     )
 
 
+def _expected_issuer() -> str:
+    """Clerk's Frontend API host is base64-encoded inside the publishable key (pk_test_<b64 host$>)."""
+    try:
+        b64 = _publishable_key().split("_", 2)[2]
+        return "https://" + base64.b64decode(b64 + "=" * (-len(b64) % 4)).decode().rstrip("$")
+    except Exception:
+        return ""
+
+
 def verify_session_token(token: str) -> dict:
-    """Return the verified claims of a Clerk session token, or raise 401."""
+    """Return the verified claims of a Clerk session token from this app's instance, or raise 401."""
     try:
         key = _jwks_client(_secret_key()).get_signing_key_from_jwt(token).key
-        return jwt.decode(token, key=key, algorithms=["RS256"], leeway=5)
+        claims = jwt.decode(token, key=key, algorithms=["RS256"], leeway=5, options={"require": ["exp", "sub", "iss"]})
     except jwt.PyJWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired session")
+    iss = claims.get("iss", "")
+    if iss != _expected_issuer() and not (_is_production() and iss.endswith(PROXY_PATH)):
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+    return claims
 
 
 def require_user(request: Request) -> dict:
@@ -124,7 +138,8 @@ def require_user(request: Request) -> dict:
     if not _secret_key():
         raise HTTPException(status_code=503, detail="Clerk is not configured")
     auth = request.headers.get("authorization", "")
-    token = auth[7:] if auth.lower().startswith("bearer ") else request.cookies.get("__session", "")
+    # Bearer header only: a cookie fallback would let other sites ride a browser session (CSRF)
+    token = auth[7:] if auth.lower().startswith("bearer ") else ""
     if not token:
         raise HTTPException(status_code=401, detail="Not signed in")
     claims = verify_session_token(token)
